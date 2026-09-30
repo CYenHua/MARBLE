@@ -4,6 +4,7 @@
 The core engine module that coordinates agents within the environment.
 """
 import json
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from marble.agent import BaseAgent
@@ -1098,6 +1099,7 @@ class Engine:
             "file_path", "result/discussion_output.jsonl"
         )
         try:
+            os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
             with open(file_path, "a") as jsonl_file:
                 print(summary_data)
                 jsonl_file.write(json.dumps(summary_data) + "\n")

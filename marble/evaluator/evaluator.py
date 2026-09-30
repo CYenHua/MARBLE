@@ -38,7 +38,8 @@ class Evaluator:
             "agent_kpis": {},
             "code_quality": {}
         }
-        with open('evaluator/evaluator_prompts.json', 'r', encoding='utf-8') as f:
+        prompts_path = os.path.join(os.path.dirname(__file__), 'evaluator_prompts.json')
+        with open(prompts_path, 'r', encoding='utf-8') as f:
             self.evaluation_prompts = json.load(f)
 
         evaluate_llm_config = self.metrics_config.get('evaluate_llm', {})
@@ -321,11 +322,11 @@ class Evaluator:
                 # Ensure ratings are integers
                 ratings_dict: Dict[str, int] = {k: int(v) for k, v in ratings.items()}
                 return ratings_dict
-            except json.JSONDecodeError:
-                self.logger.error("Failed to parse JSON from assistant's answer.")
+            else:
+                self.logger.error("No JSON found in assistant's answer.")
                 return {}
-        else:
-            self.logger.error("No JSON found in assistant's answer.")
+        except json.JSONDecodeError:
+            self.logger.error("Failed to parse JSON from assistant's answer.")
             return {}
 
     def parse_score(self, assistant_answer: str) -> int:
