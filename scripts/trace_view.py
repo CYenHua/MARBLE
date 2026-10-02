@@ -8,6 +8,7 @@ View LLM call traces written with MARBLE_TRACE=<file>.
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Tuple
 
@@ -72,15 +73,21 @@ def print_caller_stats(run: Run) -> None:
         print(f"{caller:<10} {model:<30} {n:>5} {tin:>8} {tout:>8}")
 
 
-def handoffs(run: Run) -> Tuple[Counter, Counter]:
+def handoffs(run: Run) -> Tuple[Counter, Counter, Counter]:
     """
     act_order: agent A's `act` call directly followed by agent B's `act` call.
+    chosen: agent A picked agent B in plan_next_agent (chain mode); differs from
+        act_order when the choice was invalid or unparsable and A kept the task.
     talks: agent A opened a communication session with agent B.
     """
     act_order: Counter = Counter()
+    chosen: Counter = Counter()
     talks: Counter = Counter()
     previous = None
     for e in run:
+        if e["step"] == "plan_next_agent":
+            match = re.search(r'"agent_id"\s*:\s*"([^"]*)"', e["response"] or "")
+            chosen[(e["caller"], match.group(1) if match else "(no answer)")] += 1
         if e["step"] == "act":
             if previous is not None:
                 act_order[(previous, e["caller"])] += 1
@@ -92,13 +99,17 @@ def handoffs(run: Run) -> Tuple[Counter, Counter]:
                 except (TypeError, json.JSONDecodeError):
                     target = None
                 talks[(e["caller"], target)] += 1
-    return act_order, talks
+    return act_order, chosen, talks
 
 
-def print_handoffs(act_order: Counter, talks: Counter) -> None:
+def print_handoffs(act_order: Counter, chosen: Counter, talks: Counter) -> None:
     print("\nact order (A acts, then B acts):")
     for (a, b), n in act_order.most_common():
         print(f"  {a:>10} → {b:<10} {n}")
+    if chosen:
+        print("next agent chosen in plan_next_agent (A picks B):")
+        for (a, b), n in chosen.most_common():
+            print(f"  {a:>10} → {b:<10} {n}")
     print("communication sessions (A starts a chat with B):")
     for (a, b), n in talks.most_common() or [(("(none)", ""), 0)]:
         print(f"  {a:>10} → {b:<10} {n}")
@@ -133,14 +144,12 @@ def main() -> None:
         show_call(runs, args.show)
         return
     if args.flow:
-        act_total: Counter = Counter()
-        talk_total: Counter = Counter()
+        totals: Tuple[Counter, Counter, Counter] = (Counter(), Counter(), Counter())
         for _, run in runs:
-            act_order, talks = handoffs(run)
-            act_total.update(act_order)
-            talk_total.update(talks)
+            for total, counts in zip(totals, handoffs(run)):
+                total.update(counts)
         print(f"{len(runs)} runs")
-        print_handoffs(act_total, talk_total)
+        print_handoffs(*totals)
         return
     for name, run in runs:
         print(f"\n##### {name}: {len(run)} LLM calls\n")

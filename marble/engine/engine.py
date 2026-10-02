@@ -160,6 +160,7 @@ class Engine:
                 "llm", llm
             )  # use agent-specific LLM if provided
             agent_type = agent_config.get("type")
+            agent_config = {"max_tokens": self.config.agent_max_tokens, **agent_config}
             agent = BaseAgent(
                 config=agent_config, env=self.environment, model=agent_llm
             )
@@ -1212,7 +1213,7 @@ class Engine:
         #     summary += f"- {agent_id}: {result}\n"
         for result in agents_results:
             shorten_result = f"- {result}"
-            shorten_result = shorten_result[:1000]
+            shorten_result = shorten_result[: self.config.result_chars]
             summary += f"{shorten_result}\n"
 
         self.logger.debug(f"Summarized agents' results:\n{summary}")

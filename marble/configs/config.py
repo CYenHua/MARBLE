@@ -34,6 +34,11 @@ class Config:
         self.coordination_mode = data.get("coordinate_mode", "centralized")
         self.relationships = data.get("relationships", [])
         self.output = data.get("output", {})
+        # agent_max_tokens: max output tokens per agent LLM call (upstream: 512)
+        # result_chars: chars of each agent result passed to the planner (upstream: 1000)
+        limits = data.get("output_limits", {})
+        self.agent_max_tokens: int = limits.get("agent_max_tokens", 512)
+        self.result_chars: int = limits.get("result_chars", 1000)
 
     @staticmethod
     def load(file_path: str) -> "Config":

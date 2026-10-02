@@ -125,7 +125,7 @@ agents:
     systems.'
   type: BaseAgent
   llm: gemma-4-31b-it
-coordinate_mode: graph
+coordinate_mode: chain
 engine_planner:
   initial_progress: Starting the collaborative research idea generation based on the provided Introduction.
 environment:
@@ -141,7 +141,7 @@ metrics:
   evaluate_llm: gemma-4-31b-it
   relevance: true
 output:
-  file_path: result/test_output.jsonl
+  file_path: result/test_chain_output.jsonl
   format: jsonl
 relationships:
 - - agent1

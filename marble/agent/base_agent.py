@@ -3,6 +3,7 @@ Base agent module.
 """
 
 import json
+import re
 import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
@@ -85,6 +86,8 @@ class BaseAgent:
         self.RECV_FROM = 1
         self.session_id: str = ""
         self.strategy = config.get("strategy", "default")
+        # Max output tokens per LLM call (act, communication, planning); upstream used 512
+        self.max_tokens: int = config.get("max_tokens", 512)
         self.reasoning_prompts = {
             "default": "",
             "cot": (
@@ -215,7 +218,7 @@ class BaseAgent:
                 llm_model=self.llm,
                 messages=[{"role": "user", "content": act_task}],
                 return_num=1,
-                max_token_num=512,
+                max_token_num=self.max_tokens,
                 temperature=0.0,
                 top_p=None,
                 stream=None,
@@ -225,7 +228,7 @@ class BaseAgent:
                 llm_model=self.llm,
                 messages=[{"role": "user", "content": act_task}],
                 return_num=1,
-                max_token_num=512,
+                max_token_num=self.max_tokens,
                 temperature=0.0,
                 top_p=None,
                 stream=None,
@@ -466,7 +469,7 @@ class BaseAgent:
                     {"role": "user", "content": communicate_task},
                 ],
                 return_num=1,
-                max_token_num=512,
+                max_token_num=self.max_tokens,
                 temperature=0.0,
                 top_p=None,
                 stream=None,
@@ -518,7 +521,7 @@ class BaseAgent:
                 {"role": "user", "content": summary_task},
             ],
             return_num=1,
-            max_token_num=512,
+            max_token_num=self.max_tokens,
             temperature=0.0,
             top_p=None,
             stream=None,
@@ -625,7 +628,7 @@ class BaseAgent:
                 }
             ],
             return_num=1,
-            max_token_num=512,
+            max_token_num=self.max_tokens,
             temperature=0.0,
             top_p=None,
             stream=None,
@@ -733,7 +736,7 @@ class BaseAgent:
             llm_model=self.llm,
             messages=[{"role": "system", "content": prompt}],
             return_num=1,
-            max_token_num=512,
+            max_token_num=self.max_tokens,
             temperature=0.7,
             top_p=1.0,
         )[0]
@@ -776,7 +779,7 @@ class BaseAgent:
             llm_model=self.llm,
             messages=[{"role": "system", "content": prompt}],
             return_num=1,
-            max_token_num=512,
+            max_token_num=self.max_tokens,
             temperature=0.7,
             top_p=1.0,
         )[0]
@@ -843,11 +846,13 @@ class BaseAgent:
         try:
             assert isinstance(response, str)
             # check if response is a json, or is a text + json
-            if response[0] == "{":
-                response_data: Dict[str, Any] = json.loads(response)
-            else:
-                response_data: Dict[str, Any] = json.loads(
-                    response[response.find("{") : response.rfind("}") + 1]
+            json_str = response[response.find("{") : response.rfind("}") + 1]
+            try:
+                response_data: Dict[str, Any] = json.loads(json_str)
+            except json.JSONDecodeError:
+                # LaTeX in the plan (e.g. \alpha) is not a valid JSON escape; keep it literal
+                response_data = json.loads(
+                    re.sub(r'\\(?![\\"/bfnrtu])', r"\\\\", json_str)
                 )
             next_agent_id = response_data.get("agent_id")
             planning_task = response_data.get("planning_task")

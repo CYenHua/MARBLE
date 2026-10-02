@@ -251,3 +251,6 @@ task:
     \ components of my approach and results?**\n\n                Outline your proposed methodology in\
     \ detail, including the method, dataset, and metrics that you plan to use.\n                Describe\
     \ the expected outcomes. MAKE IT CLEAR."
+output_limits:
+  agent_max_tokens: 2048   # max output tokens per agent LLM call (upstream: 512)
+  result_chars: 8000       # chars of each agent result the planner sees (upstream: 1000)
