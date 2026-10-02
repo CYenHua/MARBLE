@@ -715,10 +715,10 @@ class Engine:
                         f"Agent '{next_agent_id}' not found in the graph. keep the same agent."
                     )
                     current_agent = current_agent_
-                task = plan
+                task = plan or task  # keep the previous task if no valid next agent was chosen
                 chain_length += 1
                 self.planner.update_progress(result)
-                iteration_data["communications"] = communication
+                iteration_data["communications"] = [communication] if communication else []
 
                 # Evaluate communication
                 if iteration_data["communications"]:
@@ -854,7 +854,7 @@ class Engine:
                     f"Iteration {self.current_iteration} Summary:\n{summary}"
                 )
                 self.planner.update_progress(summary)
-                iteration_data["communications"] = communication
+                iteration_data["communications"] = [communication] if communication else []
                 iteration_data["task_assignments"] = tasks
                 iteration_data["task_results"] = results
                 # Evaluate communication

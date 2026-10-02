@@ -294,6 +294,23 @@ class AgentGraph:
             }
         return profiles
 
+    def get_agent_profiles_linked(self, agent_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Get profiles of the agents that share a relationship with the given agent.
+
+        Args:
+            agent_id (str): The ID of the agent.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: A dictionary mapping linked agent IDs to their profiles.
+        """
+        linked = [dst for src, dst, _ in self.relationships if src == agent_id]
+        linked += [src for src, dst, _ in self.relationships if dst == agent_id]
+        return {
+            other: {"agent_id": other, "profile": self.agents[other].get_profile()}
+            for other in dict.fromkeys(linked)
+        }
+
     def get_roots(self) -> List[BaseAgent]:
         """
         Get the root agents (agents with no parents).

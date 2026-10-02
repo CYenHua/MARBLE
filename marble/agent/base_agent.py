@@ -849,7 +849,6 @@ class BaseAgent:
                 response_data: Dict[str, Any] = json.loads(
                     response[response.find("{") : response.rfind("}") + 1]
                 )
-            response_data: Dict[str, Any] = json.loads(response)
             next_agent_id = response_data.get("agent_id")
             planning_task = response_data.get("planning_task")
         except (json.JSONDecodeError, KeyError):

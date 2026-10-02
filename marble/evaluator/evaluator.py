@@ -15,6 +15,15 @@ from marble.llms.model_prompting import model_prompting
 from marble.utils.logger import get_logger
 
 
+def fill_prompt(template: str, **fields: str) -> str:
+    """
+    Fill {name} placeholders without str.format, since the templates contain literal JSON braces.
+    """
+    for name, value in fields.items():
+        template = template.replace("{" + name + "}", str(value))
+    return template
+
+
 class Evaluator:
     """
     Evaluator class for tracking metrics like task completion success rate and token consumption.
@@ -76,7 +85,7 @@ class Evaluator:
         # Get the communication prompt
         communication_prompt_template = self.evaluation_prompts["Graph"]["Communication"]["prompt"]
         # Fill in the placeholders {task} and {communications}
-        prompt = communication_prompt_template.format(task=task, communications=communications)
+        prompt = fill_prompt(communication_prompt_template, task=task, communications=communications)
         # Call the language model
         result = model_prompting(
             llm_model=self.llm,
@@ -106,7 +115,7 @@ class Evaluator:
         # Get the planning prompt
         planning_prompt_template = self.evaluation_prompts["Graph"]["Planning"]["prompt"]
         # Fill in the placeholders
-        prompt = planning_prompt_template.format(
+        prompt = fill_prompt(planning_prompt_template, 
             summary=summary,
             agent_profiles=agent_profiles,
             agent_tasks=agent_tasks,
@@ -143,7 +152,7 @@ class Evaluator:
             agent_results = agent_results[:MAX_LENGTH] + "..."
         kpi_prompt_template = self.evaluation_prompts["Graph"]["KPI"]["prompt"]
         # Fill in the placeholders {task} and {agent_results}
-        prompt = kpi_prompt_template.format(task=task, agent_results=agent_results)
+        prompt = fill_prompt(kpi_prompt_template, task=task, agent_results=agent_results)
         # Call the language model
         result = model_prompting(
             llm_model=self.llm,
