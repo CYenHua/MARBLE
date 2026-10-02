@@ -8,12 +8,12 @@ from litellm.types.utils import Message
 
 from marble.llms.error_handler import api_calling_error_exponential_backoff
 
-# Local vLLM routing: model name -> (url, api_key), loaded from X-MAS's model_config.json.
-# Defaults to workflow-experiment/xmas/model_config.json; set MARBLE_MODEL_CONFIG to use another file.
+# Local vLLM routing: model name -> (url, api_key), loaded from the shared model_config.json.
+# Defaults to workflow-experiment/serving/model_config.json; set MARBLE_MODEL_CONFIG to use another file.
 _ROUTES: Dict[str, Any] = {}
 _ROUTE_FILE = os.environ.get(
     "MARBLE_MODEL_CONFIG",
-    os.path.join(os.path.dirname(__file__), "../../../xmas/model_config.json"),
+    os.path.join(os.path.dirname(__file__), "../../../serving/model_config.json"),
 )
 if os.path.isfile(_ROUTE_FILE):
     with open(_ROUTE_FILE) as f:
