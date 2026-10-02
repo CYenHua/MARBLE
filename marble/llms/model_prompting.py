@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import litellm
 from beartype import beartype
@@ -7,6 +8,7 @@ from beartype.typing import Any, Dict, List, Optional
 from litellm.types.utils import Message
 
 from marble.llms.error_handler import api_calling_error_exponential_backoff
+from marble.utils.trace import record_call
 
 # Local vLLM routing: model name -> (url, api_key), loaded from the shared model_config.json.
 # Defaults to workflow-experiment/serving/model_config.json; set MARBLE_MODEL_CONFIG to use another file.
@@ -40,6 +42,7 @@ def model_prompting(
     Select model via router in LiteLLM with support for function calling.
     """
     # litellm.set_verbose=True
+    model_name = llm_model
     api_key = None
     if llm_model in _ROUTES:
         base_url, api_key = _ROUTES[llm_model]
@@ -48,6 +51,7 @@ def model_prompting(
         base_url = "https://api.ohmygpt.com/v1"
     else:
         base_url = None
+    start = time.time()
     completion = litellm.completion(
         model=llm_model,
         messages=messages,
@@ -61,6 +65,7 @@ def model_prompting(
         base_url=base_url,
         api_key=api_key,
     )
+    record_call(model_name, messages, tools, completion, time.time() - start)
     message_0: Message = completion.choices[0].message
     assert message_0 is not None
     assert isinstance(message_0, Message)
