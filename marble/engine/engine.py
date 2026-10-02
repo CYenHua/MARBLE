@@ -1013,6 +1013,133 @@ class Engine:
                 tasks,
             )
 
+    def dag_coordinate(self) -> None:
+        """
+        DAG-based coordination mode.
+
+        Each relationship [source, target, label] is a directed edge. Agents run in
+        topological order; an agent sees the overall task, its own `dag_task` from the
+        agent config, and the outputs of its predecessors. The planner summarizes the
+        outputs of the sink agents (agents without successors) into the final answer.
+        """
+        summary_data: Dict[str, Any] = {
+            "task": self.task,
+            "coordination_mode": self.coordinate_mode,
+            "iterations": [],
+        }
+        try:
+            levels = self.graph.topological_levels()
+            sinks = [a for level in levels for a in level if not self.graph.successors(a)]
+            dag_tasks = {
+                cfg["agent_id"]: cfg.get("dag_task", "") for cfg in self.config.agents
+            }
+            summary_data["dag_levels"] = levels
+            previous_answer = ""
+
+            while self.current_iteration < self.max_iterations:
+                iteration_data: Dict[str, Any] = {
+                    "iteration": self.current_iteration + 1,
+                    "task_assignments": {},
+                    "task_results": [],
+                    "summary": "",
+                    "continue_simulation": True,
+                    "communications": [],
+                }
+                outputs: Dict[str, str] = {}
+                for level in levels:
+                    for agent_id in level:
+                        agent = self.graph.get_agent(agent_id)
+                        task = self._build_dag_task(
+                            agent_id, dag_tasks.get(agent_id, ""), outputs, previous_answer
+                        )
+                        iteration_data["task_assignments"][agent_id] = task
+                        result, communication = agent.act(task)
+                        outputs[agent_id] = result
+                        iteration_data["task_results"].append(
+                            {"agent_id": agent_id, "result": result}
+                        )
+                        if communication:
+                            iteration_data["communications"].append(communication)
+                        self.logger.info(f"Agent '{agent_id}' finished DAG node.")
+
+                sink_results = [{a: outputs[a]} for a in sinks]
+                summary = self._summarize_results(sink_results)
+                summary_from_planner = self.planner.summarize_output(
+                    summary, self.task, self.output_format
+                )
+                iteration_data["summary"] = summary_from_planner.content
+                previous_answer = summary_from_planner.content
+                # Same placeholders as graph mode: per-iteration LLM scoring is disabled
+                self.evaluator.metrics["communication_score"].append(-1)
+                self.evaluator.metrics["planning_score"].append(-1)
+                self.current_iteration += 1
+
+                continue_simulation = (
+                    self.current_iteration < self.max_iterations
+                    and self.planner.decide_next_step(sink_results)
+                )
+                iteration_data["continue_simulation"] = continue_simulation
+                summary_data["iterations"].append(iteration_data)
+                if not continue_simulation:
+                    break
+                self.planner.update_progress(summary_from_planner.content)
+
+            summary_data["planning_scores"] = self.evaluator.metrics["planning_score"]
+            summary_data["communication_scores"] = self.evaluator.metrics[
+                "communication_score"
+            ]
+            summary_data["token_usage"] = self._get_totoal_token_usage()
+            summary_data["agent_kpis"] = self.evaluator.metrics["agent_kpis"]
+            summary_data["total_milestones"] = self.evaluator.metrics["total_milestones"]
+
+            final_answer = previous_answer
+            if isinstance(self.environment, ResearchEnvironment):
+                self.evaluator.evaluate_task_research(self.task, final_answer)
+                summary_data["task_evaluation"] = self.evaluator.metrics["task_evaluation"]
+            elif self.environment.name == "World Simulation Environment":
+                self.evaluator.evaluate_task_world(self.task, final_answer)
+                summary_data["task_evaluation"] = self.evaluator.metrics["task_evaluation"]
+            elif self.environment.name == "DB Environment":
+                self.evaluator.evaluate_task_db(
+                    self.task,
+                    final_answer,
+                    self.config.task["labels"],
+                    self.config.task["number_of_labels_pred"],
+                    self.config.task["root_causes"],
+                )
+                summary_data["task_evaluation"] = self.evaluator.metrics["task_evaluation"]
+            self.logger.info("Engine DAG-based coordination loop completed.")
+
+        except Exception:
+            self.logger.exception("An error occurred during DAG-based coordination.")
+            raise
+        finally:
+            self.evaluator.finalize()
+            self.logger.info("DAG-based coordination simulation completed.")
+            self._write_to_jsonl(summary_data)
+
+    def _build_dag_task(
+        self,
+        agent_id: str,
+        dag_task: str,
+        outputs: Dict[str, str],
+        previous_answer: str,
+    ) -> str:
+        """
+        Build the task for one DAG node from the overall task, its sub-task and
+        the outputs of its predecessors.
+        """
+        task = f"Overall task:\n{self.task}\n"
+        if previous_answer:
+            task += f"\nThe team's answer from the previous round (improve on it):\n{previous_answer}\n"
+        if dag_task:
+            task += f"\nYour sub-task in this workflow:\n{dag_task}\n"
+        predecessors = self.graph.predecessors(agent_id)
+        if predecessors:
+            upstream = "\n\n".join(f"[{p}]:\n{outputs[p]}" for p in predecessors)
+            task += f"\nOutputs from the upstream agents you depend on:\n{upstream}\n"
+        return task
+
     def _select_initial_agent(self) -> Optional[BaseAgent]:
         """
         Select the initial agent to start the chain.
@@ -1051,6 +1178,9 @@ class Engine:
         elif self.coordinate_mode == "tree":
             self.logger.info("Running in tree-based coordination mode.")
             self.tree_coordinate()
+        elif self.coordinate_mode == "dag":
+            self.logger.info("Running in DAG-based coordination mode.")
+            self.dag_coordinate()
         else:
             self.logger.error(f"Unsupported coordinate mode: {self.coordinate_mode}")
             raise ValueError(f"Unsupported coordinate mode: {self.coordinate_mode}")
