@@ -4,6 +4,10 @@ Base environment module.
 
 from typing import Any, Callable, Dict, List, Union
 
+from marble.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class BaseEnvironment:
     def __init__(self, name: str, config: Dict[str, Any]):
@@ -78,8 +82,12 @@ class BaseEnvironment:
             action_name (str): The action to execute. Action name is used to retrieve the handler.
             arguments (dict): Arguments for the action handler.
         """
-        # Execution
-        action_result = self._action_handlers[action_name](**arguments)
+        # Execution; a failing tool (e.g. arXiv HTTP 429) is reported to the agent instead of ending the run
+        try:
+            action_result = self._action_handlers[action_name](**arguments)
+        except Exception as e:
+            logger.exception(f"Action '{action_name}' failed.")
+            action_result = {"success": False, "error-msg": f"{type(e).__name__}: {e}"}
 
         # Update the state with the action result
         self.state["last_action_result"] = action_result
