@@ -84,6 +84,8 @@ cd werewolf
 bash run_simulation.sh
 ```
 
+To build a role-level DAG workflow from chain runs, see [scripts/dag_build/README.md](scripts/dag_build/README.md).
+
 #### New branch for each feature
 
 `git checkout -b feature/feature-name` and PR to `main` branch.

@@ -1,0 +1,35 @@
+# Role catalogue for the research scenario.
+# label_acts.py asks the LLM to tag every chain `act` with one of these names;
+# build_dag.py turns the observed role-to-role transitions into a DAG template, and
+# each role's dag_task becomes the sub-task of the agent assigned to it.
+roles:
+  - name: literature_review
+    description: Reads the Introduction and summarizes the current state of research, prior methods and open gaps.
+    dag_task: 'Literature review: analyze the Introduction, summarize the current state of research and
+      list its open gaps.'
+  - name: ideation
+    description: Proposes new research ideas, directions or hypotheses (possibly several candidates).
+    dag_task: 'Brainstorm: based on the upstream analysis, propose 2-3 candidate research ideas that address
+      the gaps.'
+  - name: method_design
+    description: Takes an existing idea and works out its technical method in detail (algorithms, formulas,
+      architecture, components), or extends it with techniques from the agent's own expertise.
+    dag_task: 'Method design: take the most promising idea from upstream and work out its technical method in
+      detail (algorithm, formulation, key components).'
+  - name: critique
+    description: Evaluates, validates or criticizes ideas or methods; points out risks, weaknesses, feasibility
+      issues; compares and selects among candidates.
+    dag_task: 'Critique: evaluate the upstream ideas and methods, point out weaknesses, risks and feasibility
+      issues, and state which direction to keep and what must be fixed.'
+  - name: experiment_design
+    description: Plans experiments, datasets, baselines, metrics and expected results.
+    dag_task: 'Experiment design: for the upstream method, specify datasets, baselines, metrics, ablations and
+      expected outcomes.'
+  - name: synthesis
+    description: Integrates contributions from several earlier steps into one consistent framework without
+      mainly adding new content.
+    dag_task: 'Synthesis: integrate the upstream contributions into one consistent research plan, resolving
+      conflicts between them.'
+  - name: writing
+    description: Writes the final proposal, e.g. answers in the 5-question ('5q') format.
+    dag_task: Write the final research proposal for the selected idea in the '5q' format.
