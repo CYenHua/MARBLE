@@ -68,15 +68,26 @@ def ask(
 
 
 def parse(reply: str, roles: List[Dict[str, str]], agent_ids: List[str], reuse: bool) -> Optional[Dict[str, Any]]:
-    """Return {'assignments': ..., 'reasons': ...} if the reply is a valid assignment, else None."""
-    match = re.search(r"\{.*\}", reply, re.S)
-    if not match:
+    """
+    Return {'assignments': ..., 'reasons': ...} if the reply is a valid assignment, else None.
+    The model sometimes corrects itself within one reply, so the last valid JSON object wins.
+    """
+    decoder = json.JSONDecoder()
+    for start in reversed([m.start() for m in re.finditer(r"\{", reply)]):
+        try:
+            data, _ = decoder.raw_decode(reply, start)
+        except json.JSONDecodeError:
+            continue
+        result = _validate(data, roles, agent_ids, reuse)
+        if result:
+            return result
+    return None
+
+
+def _validate(data: Any, roles: List[Dict[str, str]], agent_ids: List[str], reuse: bool) -> Optional[Dict[str, Any]]:
+    if not isinstance(data, dict) or not isinstance(data.get("assignments"), dict):
         return None
-    try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    assignments = data.get("assignments") or {}
+    assignments = data["assignments"]
     names = [r["name"] for r in roles]
     if set(assignments) != set(names) or any(assignments[n] not in agent_ids for n in names):
         return None
@@ -123,8 +134,15 @@ def main() -> None:
         base_config = yaml.safe_load(f)
     roles, edges = template["roles"], template["edges"]
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
+    tasks = load_tasks(args.bench, parse_ids(args.tasks))
+    # Rerunning a task replaces its earlier assignment in the log
+    if os.path.exists(args.log):
+        with open(args.log) as f:
+            kept = [line for line in f if json.loads(line)["task_id"] not in tasks]
+        with open(args.log, "w") as f:
+            f.writelines(kept)
 
-    for task_id, task in sorted(load_tasks(args.bench, parse_ids(args.tasks)).items()):
+    for task_id, task in sorted(tasks.items()):
         agent_ids = [a["agent_id"] for a in task["agents"]]
         result = None
         for _ in range(args.retries):

@@ -20,6 +20,8 @@ run_one() {
     fi
     echo "start $name"
     rm -f "$TRACE_DIR/$name.jsonl.part"
+    # The engine appends to its output file, so drop what a failed earlier attempt wrote
+    rm -f "$("$PYTHON" -c "import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))['output']['file_path'])" "$config")"
     MARBLE_TRACE="$TRACE_DIR/$name.jsonl.part" "$PYTHON" marble/main.py --config_path "$config" \
         > "$LOG_DIR/$name.log" 2>&1
     status=$?

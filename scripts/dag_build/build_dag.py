@@ -7,10 +7,14 @@ Turn the act labels from label_acts.py into a role-level DAG template.
 1. Per run, the acts in order give a role sequence, e.g. ideation -> method_design -> critique.
 2. Count role -> role transitions over all runs (self-loops counted but not used as edges).
 3. Order roles by their mean relative position in the runs (0 = first act, 1 = last act).
+   The final role (--final-role, default writing) is left out of this ordering: agents
+   sometimes draft the 5q answer early, but in the DAG it always comes last.
 4. Keep a transition as an edge if it goes forward in that order and occurs >= --min-edge
    times; backward transitions (loops) are dropped so the result is acyclic.
-5. A kept role that is not first but has no incoming edge gets one from its most frequent
-   earlier predecessor (or the role right before it), so the DAG stays connected.
+5. A role other than the first that has no kept incoming edge is not supported by the
+   data and is dropped (repeated until stable, since dropping a role can orphan another).
+6. Every remaining role without a successor gets an edge to the final role, so the DAG
+   has a single sink whose output the planner turns into the answer.
 
 The template lists roles (with their dag_task from roles.yaml) and edges; edit it by hand
 if needed, then run assign_roles.py.
@@ -32,6 +36,7 @@ def main() -> None:
     parser.add_argument("--out", default="result/dag_build/dag_template.yaml")
     parser.add_argument("--min-role", type=int, default=2, help="drop roles seen in fewer runs than this")
     parser.add_argument("--min-edge", type=int, default=2, help="drop transitions seen fewer times than this")
+    parser.add_argument("--final-role", default="writing", help="role placed last as the single sink ('' for none)")
     args = parser.parse_args()
 
     with open(args.roles) as f:
@@ -64,18 +69,27 @@ def main() -> None:
     for (a, b), n in transitions.most_common():
         print(f"  {a:>18} -> {b:<18} {n}")
 
-    roles = [r for r in sorted(mean_pos, key=mean_pos.get) if runs_with[r] >= args.min_role and r in catalogue]
-    rank = {r: i for i, r in enumerate(roles)}
-    edges = [
-        [a, b]
-        for (a, b), n in transitions.most_common()
-        if a in rank and b in rank and rank[a] < rank[b] and n >= args.min_edge
+    final = args.final_role
+    candidates = [
+        r for r in sorted(mean_pos, key=mean_pos.get) if runs_with[r] >= args.min_role and r in catalogue and r != final
     ]
-    for role in roles[1:]:
-        if not any(b == role for _, b in edges):
-            earlier = [(n, a) for (a, b), n in transitions.items() if b == role and a in rank and rank[a] < rank[role]]
-            source = max(earlier)[1] if earlier else roles[rank[role] - 1]
-            edges.append([source, role])
+    while True:
+        rank = {r: i for i, r in enumerate(candidates)}
+        edges = [
+            [a, b]
+            for (a, b), n in transitions.most_common()
+            if a in rank and b in rank and rank[a] < rank[b] and n >= args.min_edge
+        ]
+        unsupported = [r for r in candidates[1:] if not any(b == r for _, b in edges)]
+        if not unsupported:
+            break
+        candidates = [r for r in candidates if r not in unsupported]
+    roles = list(candidates)
+    if final:
+        sinks = [r for r in roles if not any(a == r for a, _ in edges)]
+        edges += [[r, final] for r in sinks]
+        roles.append(final)
+    rank = {r: i for i, r in enumerate(roles)}
     edges.sort(key=lambda e: (rank[e[0]], rank[e[1]]))
 
     template = {
@@ -95,7 +109,7 @@ def main() -> None:
         print(f"  {a} -> {b}")
     dropped = sorted(set(mean_pos) - set(roles))
     if dropped:
-        print(f"dropped roles (rare or 'other'): {dropped}")
+        print(f"dropped roles (rare, without a supported incoming edge, or 'other'): {dropped}")
     print(f"written to {args.out}")
 
 
