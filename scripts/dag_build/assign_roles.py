@@ -49,7 +49,12 @@ Answer with JSON only:
 
 
 def ask(
-    task: Dict[str, Any], roles: List[Dict[str, str]], model: str, profile_chars: int, task_chars: int
+    task: Dict[str, Any],
+    roles: List[Dict[str, str]],
+    model: str,
+    profile_chars: int,
+    task_chars: int,
+    previous: Optional[str] = None,
 ) -> tuple:
     agents = task["agents"]
     reuse = len(agents) < len(roles)
@@ -63,7 +68,20 @@ def ask(
         roles="\n".join(f"- {r['name']}: {r['dag_task']}" for r in roles),
         agents="\n\n".join(f"{a['agent_id']}: {a['profile'].strip()[:profile_chars]}" for a in agents),
     )
-    reply = model_prompting(model, [{"role": "user", "content": prompt}], max_token_num=1024)[0].content or ""
+    messages = [{"role": "user", "content": prompt}]
+    if previous is not None:
+        # Retry with the rejected answer in context, so the model fixes it instead of repeating it
+        names = ", ".join(r["name"] for r in roles)
+        rule = "" if reuse else " No agent_id may appear twice."
+        messages += [
+            {"role": "assistant", "content": previous},
+            {
+                "role": "user",
+                "content": f"That answer is invalid. Assign exactly these roles: {names}, each to one of "
+                f"{', '.join(a['agent_id'] for a in agents)}.{rule} Answer with the corrected JSON only.",
+            },
+        ]
+    reply = model_prompting(model, messages, max_token_num=1024)[0].content or ""
     return reply, reuse
 
 
@@ -145,8 +163,9 @@ def main() -> None:
     for task_id, task in sorted(tasks.items()):
         agent_ids = [a["agent_id"] for a in task["agents"]]
         result = None
+        reply = None
         for _ in range(args.retries):
-            reply, reuse = ask(task, roles, args.model, args.profile_chars, args.task_chars)
+            reply, reuse = ask(task, roles, args.model, args.profile_chars, args.task_chars, reply)
             result = parse(reply, roles, agent_ids, reuse)
             if result:
                 break

@@ -30,3 +30,43 @@ Notes:
   `result/dag_build/dag_template.yaml` (editable by hand) before step 2.
 - Act labels are written to `result/dag_build/act_labels.jsonl`, role assignments with the model's
   reasons to `result/dag_build/assignments.jsonl`.
+
+## Matching what DAG nodes see to chain mode
+
+In chain mode only the first agent sees the task; every later agent gets just the plan the
+previous agent wrote for it, and the planner builds the answer from all agents' outputs. DAG
+configs can do the same through a `dag` section (defaults keep the original behavior):
+
+```yaml
+dag:
+  handoff: note      # full (default): overall task + predecessors' full outputs
+                     # note: only the plan each predecessor writes for the node
+  summarize: all     # sinks (default): planner sees the sink nodes; all: every node
+```
+
+`variant_configs.py` copies a config directory with such settings changed, keeping the agents,
+roles and edges identical:
+
+```bash
+.venv/bin/python scripts/dag_build/variant_configs.py configs/dag_eval configs/dag_note_eval --handoff note --summarize all
+bash scripts/dag_build/run_chain.sh configs/dag_note_eval 5
+.venv/bin/python scripts/dag_build/compare.py chain=result/traces/chain_eval dag_full=result/traces/dag_eval dag_note=result/traces/dag_note_eval
+```
+
+Other helpers: `compare.py` (scores, tokens and time per condition), `coverage.py` (how many
+agents of a team actually act).
+
+## Static mode: chain with a fixed order
+
+`coordinate_mode: static` runs the chain loop unchanged except that the next agent comes from
+`static.schedule` instead of the acting agent's choice. Prompts, agent ids, memory, the list of
+teammates, the planner and evaluator calls are those of chain mode; the hand-off plan prompt only
+names the fixed next agent instead of asking for a choice, and the last agent writes no plan.
+`static_configs.py` copies each chain config and adds the schedule: a topological order of the
+role DAG mapped to the agents `assign_roles.py` chose (an agent holding two roles appears twice).
+
+```bash
+.venv/bin/python scripts/dag_build/static_configs.py --chain configs/chain_eval --dag configs/dag_eval --out configs/static_eval
+bash scripts/dag_build/run_chain.sh configs/static_eval 5
+.venv/bin/python scripts/dag_build/compare.py chain=result/traces/chain_eval static=result/traces/static_eval
+```
