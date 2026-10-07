@@ -139,7 +139,11 @@ def topological_order(roles: List[str], edges: List[List[str]]) -> List[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tasks", default="1-10")
-    parser.add_argument("--template", default="result/dag_build/dag_template.yaml", help="output of build_dag.py")
+    parser.add_argument(
+        "--template",
+        default=os.path.join(os.path.dirname(__file__), "dag_template.yaml"),
+        help="role DAG from build_dag.py",
+    )
     parser.add_argument("--bench", default=BENCH)
     parser.add_argument("--base", default="test_chain.yaml", help="chain config to copy settings from")
     parser.add_argument("--out", default="configs/static")

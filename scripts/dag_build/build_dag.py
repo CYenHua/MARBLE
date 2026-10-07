@@ -2,7 +2,7 @@
 Turn the act labels from label_acts.py into a role-level DAG template.
 
     python scripts/dag_build/build_dag.py
-    python scripts/dag_build/build_dag.py --min-edge 3 --min-role 2 --out result/dag_build/dag_template.yaml
+    python scripts/dag_build/build_dag.py --min-edge 3 --min-role 2 --out /tmp/dag_try.yaml
 
 1. Per run, the acts in order give a role sequence, e.g. ideation -> method_design -> critique.
 2. Count role -> role transitions over all runs (self-loops counted but not used as edges).
@@ -17,7 +17,9 @@ Turn the act labels from label_acts.py into a role-level DAG template.
    has a single sink.
 
 The template lists roles (with their dag_task from roles.yaml) and edges; edit it by hand
-if needed, then run assign_roles.py, which runs the roles in a topological order.
+if needed, then run assign_roles.py, which runs the roles in a topological order. The
+default output, scripts/dag_build/dag_template.yaml, is tracked in git: it is the DAG the
+experiments use, so overwriting it changes every static config made afterwards.
 """
 
 import argparse
@@ -33,7 +35,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--labels", default="result/dag_build/act_labels.jsonl")
     parser.add_argument("--roles", default=os.path.join(os.path.dirname(__file__), "roles.yaml"))
-    parser.add_argument("--out", default="result/dag_build/dag_template.yaml")
+    parser.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "dag_template.yaml"))
     parser.add_argument("--min-role", type=int, default=2, help="drop roles seen in fewer runs than this")
     parser.add_argument("--min-edge", type=int, default=2, help="drop transitions seen fewer times than this")
     parser.add_argument("--final-role", default="writing", help="role placed last as the single sink ('' for none)")

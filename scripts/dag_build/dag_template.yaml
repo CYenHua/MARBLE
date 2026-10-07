@@ -1,0 +1,34 @@
+roles:
+- name: ideation
+  dag_task: 'Brainstorm: based on the upstream analysis, propose 2-3 candidate research ideas that address the gaps.'
+- name: method_design
+  dag_task: 'Method design: take the most promising idea from upstream and work out its technical method in detail
+    (algorithm, formulation, key components).'
+- name: critique
+  dag_task: 'Critique: evaluate the upstream ideas and methods, point out weaknesses, risks and feasibility issues,
+    and state which direction to keep and what must be fixed.'
+- name: experiment_design
+  dag_task: 'Experiment design: for the upstream method, specify datasets, baselines, metrics, ablations and expected
+    outcomes.'
+- name: writing
+  dag_task: Write the final research proposal for the selected idea in the '5q' format.
+edges:
+- - ideation
+  - method_design
+- - method_design
+  - critique
+- - method_design
+  - experiment_design
+- - critique
+  - writing
+- - experiment_design
+  - writing
+source:
+  labels: result/dag_build/act_labels.jsonl
+  runs: 10
+  edge_counts:
+    ideation -> method_design: 5
+    method_design -> critique: 5
+    method_design -> experiment_design: 4
+    critique -> writing: 1
+    experiment_design -> writing: 0

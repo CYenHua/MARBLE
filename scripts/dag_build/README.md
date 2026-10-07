@@ -15,7 +15,7 @@ bash scripts/dag_build/run_chain.sh configs/chain 4
 # 1a. Tag every act with a role (LLM)
 .venv/bin/python scripts/dag_build/label_acts.py result/traces/chain/*.jsonl --show
 
-# 1b. Role transitions -> role DAG template, result/dag_build/dag_template.yaml
+# 1b. Role transitions -> role DAG template, scripts/dag_build/dag_template.yaml (tracked)
 .venv/bin/python scripts/dag_build/build_dag.py
 
 # 2. Assign each task's agents to the roles (LLM) -> static configs
@@ -53,8 +53,9 @@ times and plays each turn as itself, with its own memory.
 - The second argument of `run_chain.sh` is how many tasks run at the same time, not how many tasks run;
   it runs every yaml in the config directory, whatever its `coordinate_mode`. Finished traces are
   skipped on reruns.
-- Roles and their descriptions are defined in `roles.yaml`. Review
-  `result/dag_build/dag_template.yaml` (editable by hand) before step 2.
+- Roles and their descriptions are defined in `roles.yaml`. Review `dag_template.yaml`
+  (editable by hand) before step 2. It is the DAG the experiments use (built from tasks 1-10)
+  and is tracked in git; rebuilding it overwrites it.
 - Act labels are written to `result/dag_build/act_labels.jsonl`, role assignments with the model's
   reasons to `result/dag_build/assignments.jsonl`. The model's assignments are not reproducible;
   `assign_roles.py --reuse-log` rebuilds configs from the logged ones without asking again.
