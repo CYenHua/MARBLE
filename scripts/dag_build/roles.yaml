@@ -1,7 +1,8 @@
 # Role catalogue for the research scenario.
 # label_acts.py asks the LLM to tag every chain `act` with one of these names;
 # build_dag.py turns the observed role-to-role transitions into a DAG template, and
-# each role's dag_task becomes the sub-task of the agent assigned to it.
+# assign_roles.py shows each role's dag_task to the LLM that assigns agents to roles.
+# Agents never see dag_task: static mode runs with chain-mode prompts.
 roles:
   - name: literature_review
     description: Reads the Introduction and summarizes the current state of research, prior methods and open gaps.

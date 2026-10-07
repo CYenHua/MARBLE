@@ -14,10 +14,10 @@ Turn the act labels from label_acts.py into a role-level DAG template.
 5. A role other than the first that has no kept incoming edge is not supported by the
    data and is dropped (repeated until stable, since dropping a role can orphan another).
 6. Every remaining role without a successor gets an edge to the final role, so the DAG
-   has a single sink whose output the planner turns into the answer.
+   has a single sink.
 
 The template lists roles (with their dag_task from roles.yaml) and edges; edit it by hand
-if needed, then run assign_roles.py.
+if needed, then run assign_roles.py, which runs the roles in a topological order.
 """
 
 import argparse

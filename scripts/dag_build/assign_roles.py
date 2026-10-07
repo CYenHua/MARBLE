@@ -1,15 +1,18 @@
 """
-Build per-task DAG configs from a role-level DAG template: an LLM reads the task's agent
-profiles and assigns one agent to each role.
+Turn the role DAG template into per-task static configs: an LLM reads the task's agent
+profiles and assigns one agent to each role, and the roles' topological order becomes the
+task's fixed schedule.
 
     python scripts/dag_build/assign_roles.py --tasks 1-10
-    python scripts/dag_build/assign_roles.py --tasks 11-20 --template result/dag_build/dag_template.yaml
+    python scripts/dag_build/assign_roles.py --tasks 12-21 --out configs/static_eval --result-dir result/static_eval
+    python scripts/dag_build/assign_roles.py --tasks 12-21 --reuse-log   # rebuild configs, no LLM calls
 
-Each role becomes one DAG node: the assigned agent with the role's dag_task, and every
-template edge becomes a 'feeds' relationship. Agents without a role are left out. If a task
-has fewer agents than roles, an agent may take several roles; its extra nodes get the id
-'<agent>_<role>' with the same profile. Assignments and the model's reasons are appended
-to result/dag_build/assignments.jsonl.
+A static config is the task's chain config (same template as make_configs.py) with
+coordinate_mode: static and static.schedule, so it runs exactly like chain mode except that
+the order of agents is fixed. If a task has fewer agents than roles, an agent takes several
+roles and appears several times in the schedule. Assignments and the model's reasons go to
+result/dag_build/assignments.jsonl; --reuse-log takes a task's assignment from there instead
+of asking again (the model's choices are not reproducible).
 """
 
 import argparse
@@ -114,20 +117,23 @@ def _validate(data: Any, roles: List[Dict[str, str]], agent_ids: List[str], reus
     return {"assignments": {n: assignments[n] for n in names}, "reasons": data.get("reasons") or {}}
 
 
-def dag_config(
-    base: Dict[str, Any], task: Dict[str, Any], roles: List[Dict[str, str]], edges: List[List[str]], assignments: Dict[str, str]
-) -> Dict[str, Any]:
-    profiles = {a["agent_id"]: a for a in base["agents"]}
-    node_of: Dict[str, str] = {}
-    agents = []
-    for role in roles:
-        agent_id = assignments[role["name"]]
-        node = agent_id if agent_id not in node_of.values() else f"{agent_id}_{role['name']}"
-        node_of[role["name"]] = node
-        agents.append({**profiles[agent_id], "agent_id": node, "role": role["name"], "dag_task": role["dag_task"]})
-    base["agents"] = agents
-    base["relationships"] = [[node_of[a], node_of[b], "feeds"] for a, b in edges]
-    return base
+def topological_order(roles: List[str], edges: List[List[str]]) -> List[str]:
+    """Roles in an order that respects every edge; ties keep the template's order."""
+    indegree = {r: sum(dst == r for _, dst in edges) for r in roles}
+    ready = [r for r in roles if indegree[r] == 0]
+    order: List[str] = []
+    while ready:
+        role = ready.pop(0)
+        order.append(role)
+        for src, dst in edges:
+            if src == role:
+                indegree[dst] -= 1
+                if indegree[dst] == 0:
+                    ready.append(dst)
+        ready.sort(key=roles.index)
+    if len(order) != len(roles):
+        raise ValueError("the role DAG has a cycle")
+    return order
 
 
 def main() -> None:
@@ -135,12 +141,13 @@ def main() -> None:
     parser.add_argument("--tasks", default="1-10")
     parser.add_argument("--template", default="result/dag_build/dag_template.yaml", help="output of build_dag.py")
     parser.add_argument("--bench", default=BENCH)
-    parser.add_argument("--base", default="test_dag.yaml", help="config to copy model / limits / metrics from")
-    parser.add_argument("--out", default="configs/dag")
-    parser.add_argument("--result-dir", default="result/dag")
-    parser.add_argument("--max-iterations", type=int, default=1, help="rounds over the whole DAG")
+    parser.add_argument("--base", default="test_chain.yaml", help="chain config to copy settings from")
+    parser.add_argument("--out", default="configs/static")
+    parser.add_argument("--result-dir", default="result/static")
+    parser.add_argument("--max-iterations", type=int, default=2, help="kept equal to the chain configs (unused)")
     parser.add_argument("--model", default="gemma-4-31b-it")
     parser.add_argument("--log", default="result/dag_build/assignments.jsonl")
+    parser.add_argument("--reuse-log", action="store_true", help="use assignments already in --log")
     parser.add_argument("--profile-chars", type=int, default=1500)
     parser.add_argument("--task-chars", type=int, default=3000)
     parser.add_argument("--retries", type=int, default=3)
@@ -150,41 +157,45 @@ def main() -> None:
         template = yaml.safe_load(f)
     with open(args.base) as f:
         base_config = yaml.safe_load(f)
-    roles, edges = template["roles"], template["edges"]
+    roles = template["roles"]
+    order = topological_order([r["name"] for r in roles], template["edges"])
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
     tasks = load_tasks(args.bench, parse_ids(args.tasks))
-    # Rerunning a task replaces its earlier assignment in the log
+
+    logged: Dict[int, Dict[str, Any]] = {}
     if os.path.exists(args.log):
         with open(args.log) as f:
-            kept = [line for line in f if json.loads(line)["task_id"] not in tasks]
-        with open(args.log, "w") as f:
-            f.writelines(kept)
+            logged = {d["task_id"]: d for d in map(json.loads, f)}
 
     for task_id, task in sorted(tasks.items()):
         agent_ids = [a["agent_id"] for a in task["agents"]]
-        result = None
-        reply = None
-        for _ in range(args.retries):
-            reply, reuse = ask(task, roles, args.model, args.profile_chars, args.task_chars, reply)
-            result = parse(reply, roles, agent_ids, reuse)
-            if result:
-                break
-        if result is None:
-            print(f"task {task_id}: no valid assignment after {args.retries} tries, last reply:\n{reply}")
-            continue
+        if args.reuse_log and task_id in logged:
+            result = {k: logged[task_id][k] for k in ("assignments", "reasons")}
+        else:
+            result, reply = None, None
+            for _ in range(args.retries):
+                reply, reuse = ask(task, roles, args.model, args.profile_chars, args.task_chars, reply)
+                result = parse(reply, roles, agent_ids, reuse)
+                if result:
+                    break
+            if result is None:
+                print(f"task {task_id}: no valid assignment after {args.retries} tries, last reply:\n{reply}")
+                continue
+            # A new assignment replaces the task's earlier one in the log
+            logged[task_id] = {"task_id": task_id, "template": args.template, **result}
+            with open(args.log, "w") as f:
+                for entry in logged.values():
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         config = build_config(
-            base_config, task, "dag", f"{args.result_dir}/task_{task_id}.jsonl", args.max_iterations
+            base_config, task, "static", f"{args.result_dir}/task_{task_id}.jsonl", args.max_iterations
         )
-        config = dag_config(config, task, roles, edges, result["assignments"])
+        config["static"] = {"schedule": [result["assignments"][r] for r in order], "roles": order}
         path = f"{args.out}/task_{task_id}.yaml"
         write_yaml(config, path)
-        with open(args.log, "a") as f:
-            f.write(json.dumps({"task_id": task_id, "template": args.template, **result}, ensure_ascii=False) + "\n")
         print(f"task {task_id} ({len(agent_ids)} agents) -> {path}")
-        for role in roles:
-            name = role["name"]
-            print(f"    {name:<18} {result['assignments'][name]:<8} {result['reasons'].get(name, '')}")
+        for role in order:
+            print(f"    {role:<18} {result['assignments'][role]:<8} {result['reasons'].get(role, '')}")
 
 
 if __name__ == "__main__":

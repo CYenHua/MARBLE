@@ -311,51 +311,6 @@ class AgentGraph:
             for other in dict.fromkeys(linked)
         }
 
-    # DAG helpers: every relationship (source, target, _) is a directed edge source -> target
-
-    def predecessors(self, agent_id: str) -> List[str]:
-        """
-        Get the IDs of agents with an edge into the given agent, in config order.
-        """
-        return [src for src, dst, _ in self.relationships if dst == agent_id]
-
-    def successors(self, agent_id: str) -> List[str]:
-        """
-        Get the IDs of agents the given agent has an edge to, in config order.
-        """
-        return [dst for src, dst, _ in self.relationships if src == agent_id]
-
-    def topological_levels(self) -> List[List[str]]:
-        """
-        Group agents into levels with Kahn's algorithm. Every agent's predecessors
-        are in earlier levels, so agents within one level are independent.
-
-        Raises:
-            ValueError: If the relationships contain a cycle.
-
-        Returns:
-            List[List[str]]: Agent IDs per level, in execution order.
-        """
-        in_degree = {agent_id: 0 for agent_id in self.agents}
-        for _, dst, _ in self.relationships:
-            in_degree[dst] += 1
-        level = [agent_id for agent_id, deg in in_degree.items() if deg == 0]
-        levels: List[List[str]] = []
-        while level:
-            levels.append(level)
-            next_level = []
-            for agent_id in level:
-                for dst in self.successors(agent_id):
-                    in_degree[dst] -= 1
-                    if in_degree[dst] == 0:
-                        next_level.append(dst)
-            level = next_level
-        if sum(len(lv) for lv in levels) != len(self.agents):
-            cyclic = [agent_id for agent_id, deg in in_degree.items() if deg > 0]
-            raise ValueError(f"Relationships contain a cycle among agents {cyclic}.")
-        self.logger.info(f"DAG levels: {levels}")
-        return levels
-
     def get_roots(self) -> List[BaseAgent]:
         """
         Get the root agents (agents with no parents).
