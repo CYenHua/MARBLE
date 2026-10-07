@@ -657,22 +657,36 @@ class Engine:
     def chain_coordinate(self) -> None:
         """
         Chain-based coordination mode.
+
+        Also runs static mode: the same loop, except that the order of agents is the fixed
+        `static.schedule` from the config instead of each agent choosing the next one. The
+        acting agent still writes the plan for the next agent, with the same prompt apart
+        from naming that agent; everything else (prompts, memory, planner and evaluator
+        calls) is shared with chain mode.
         """
         try:
+            static = self.coordinate_mode == "static"
+            schedule = self.config.static_schedule
+            if static and (not schedule or any(a not in self.graph.agents for a in schedule)):
+                raise ValueError(f"static.schedule must list agents of the task, got {schedule}")
             self.logger.info("Starting chain-based coordination.")
             summary_data = {
                 "task": self.task,
                 "coordination_mode": self.coordinate_mode,
                 "iterations": [],
             }
+            if static:
+                summary_data["static_schedule"] = schedule
             # Start with the initial agent
-            current_agent = self._select_initial_agent()
+            current_agent = (
+                self.graph.get_agent(schedule[0]) if static else self._select_initial_agent()
+            )
             if not current_agent:
                 self.logger.error("No initial agent found for chain.")
                 return
 
-            max_chain_length = self.max_iterations * len(
-                self.agents
+            max_chain_length = (
+                len(schedule) if static else self.max_iterations * len(self.agents)
             )  # Or define a separate chain length limit
             chain_length = 0
 
@@ -704,10 +718,19 @@ class Engine:
                 agent_profiles = self.graph.get_agent_profiles_linked(
                     current_agent.agent_id
                 )
-                # Current agent chooses the next agent
-                next_agent_id, plan = current_agent.plan_next_agent(
-                    result, agent_profiles
-                )
+                if not static:
+                    # Current agent chooses the next agent
+                    next_agent_id, plan = current_agent.plan_next_agent(
+                        result, agent_profiles
+                    )
+                elif chain_length + 1 < len(schedule):
+                    # The next agent is fixed; the current agent only writes its plan
+                    next_agent_id, plan = current_agent.plan_next_agent(
+                        result, agent_profiles, fixed_next=schedule[chain_length + 1]
+                    )
+                else:
+                    # End of the schedule: nobody to hand off to
+                    next_agent_id, plan = current_agent.agent_id, None
                 current_agent_ = current_agent
                 try:
                     current_agent = self.graph.get_agent(next_agent_id)
@@ -783,7 +806,7 @@ class Engine:
                 self.evaluator.evaluate_task_research(
                     self.task, iteration_data["summary"]
                 )
-                # summary_data['task_evaluation'] = self.evaluator.metrics["task_evaluation"]
+                summary_data["task_evaluation"] = self.evaluator.metrics["task_evaluation"]
                 self.logger.info("Engine chain-based coordination loop completed.")
             elif self.environment.name == "World Simulation Environment":
                 self.evaluator.evaluate_task_world(self.task, iteration_data["summary"])
@@ -1019,9 +1042,14 @@ class Engine:
         DAG-based coordination mode.
 
         Each relationship [source, target, label] is a directed edge. Agents run in
-        topological order; an agent sees the overall task, its own `dag_task` from the
-        agent config, and the outputs of its predecessors. The planner summarizes the
-        outputs of the sink agents (agents without successors) into the final answer.
+        topological order and get their own `dag_task` from the agent config. What else a
+        node sees depends on the `dag.handoff` config:
+          full: the overall task and the full outputs of its predecessors
+          note: (non-root nodes) only a hand-off note each predecessor writes for it,
+                as the next agent in chain mode only gets the previous agent's plan
+        Root nodes always get the overall task. The planner turns the outputs of the sink
+        agents (`dag.summarize: sinks`) or of every agent (`all`, as in chain mode) into
+        the final answer.
         """
         summary_data: Dict[str, Any] = {
             "task": self.task,
@@ -1029,6 +1057,13 @@ class Engine:
             "iterations": [],
         }
         try:
+            handoff, summarize = self.config.dag_handoff, self.config.dag_summarize
+            if handoff not in ("full", "note") or summarize not in ("sinks", "all"):
+                raise ValueError(
+                    f"Unknown dag settings handoff={handoff!r}, summarize={summarize!r}; "
+                    "expected handoff full|note and summarize sinks|all."
+                )
+            summary_data["dag_settings"] = {"handoff": handoff, "summarize": summarize}
             levels = self.graph.topological_levels()
             sinks = [a for level in levels for a in level if not self.graph.successors(a)]
             dag_tasks = {
@@ -1045,13 +1080,15 @@ class Engine:
                     "summary": "",
                     "continue_simulation": True,
                     "communications": [],
+                    "handoffs": {},
                 }
                 outputs: Dict[str, str] = {}
+                notes: Dict[str, str] = {}  # "source -> target": hand-off note
                 for level in levels:
                     for agent_id in level:
                         agent = self.graph.get_agent(agent_id)
                         task = self._build_dag_task(
-                            agent_id, dag_tasks.get(agent_id, ""), outputs, previous_answer
+                            agent_id, dag_tasks.get(agent_id, ""), outputs, notes, previous_answer
                         )
                         iteration_data["task_assignments"][agent_id] = task
                         result, communication = agent.act(task)
@@ -1061,10 +1098,20 @@ class Engine:
                         )
                         if communication:
                             iteration_data["communications"].append(communication)
+                        if handoff == "note":
+                            for successor in self.graph.successors(agent_id):
+                                notes[f"{agent_id} -> {successor}"] = agent.write_handoff(
+                                    result,
+                                    successor,
+                                    self.graph.get_agent(successor).profile,
+                                    dag_tasks.get(successor, ""),
+                                )
                         self.logger.info(f"Agent '{agent_id}' finished DAG node.")
+                iteration_data["handoffs"] = notes
 
-                sink_results = [{a: outputs[a]} for a in sinks]
-                summary = self._summarize_results(sink_results)
+                summarized = sinks if summarize == "sinks" else [a for level in levels for a in level]
+                summary_results = [{a: outputs[a]} for a in summarized]
+                summary = self._summarize_results(summary_results)
                 summary_from_planner = self.planner.summarize_output(
                     summary, self.task, self.output_format
                 )
@@ -1077,7 +1124,7 @@ class Engine:
 
                 continue_simulation = (
                     self.current_iteration < self.max_iterations
-                    and self.planner.decide_next_step(sink_results)
+                    and self.planner.decide_next_step(summary_results)
                 )
                 iteration_data["continue_simulation"] = continue_simulation
                 summary_data["iterations"].append(iteration_data)
@@ -1124,18 +1171,33 @@ class Engine:
         agent_id: str,
         dag_task: str,
         outputs: Dict[str, str],
+        notes: Dict[str, str],
         previous_answer: str,
     ) -> str:
         """
-        Build the task for one DAG node from the overall task, its sub-task and
-        the outputs of its predecessors.
+        Build the task for one DAG node: its sub-task (unless dag.sub_task is false) plus,
+        with full hand-offs, the overall task and its predecessors' outputs, or with note
+        hand-offs, only the notes its predecessors wrote for it (root nodes still get the
+        overall task). With note hand-offs and no sub-task, a node's task is exactly what
+        an agent gets in chain mode: the task itself for the root, the plan otherwise.
         """
+        predecessors = self.graph.predecessors(agent_id)
+        if not self.config.dag_sub_task:
+            dag_task = ""
+        if self.config.dag_handoff == "note" and predecessors:
+            plans = [notes[f"{p} -> {agent_id}"] for p in predecessors]
+            if len(plans) == 1 and not dag_task:
+                return plans[0]  # exactly what the next agent gets in chain mode
+            task = f"Your sub-task in this workflow:\n{dag_task}\n" if dag_task else ""
+            upstream = "\n\n".join(f"[{p}]:\n{plan}" for p, plan in zip(predecessors, plans))
+            return task + f"\nPlans from the upstream agents you depend on:\n{upstream}\n"
+        if self.config.dag_handoff == "note" and not dag_task and not previous_answer:
+            return self.task  # exactly what the first agent gets in chain mode
         task = f"Overall task:\n{self.task}\n"
         if previous_answer:
             task += f"\nThe team's answer from the previous round (improve on it):\n{previous_answer}\n"
         if dag_task:
             task += f"\nYour sub-task in this workflow:\n{dag_task}\n"
-        predecessors = self.graph.predecessors(agent_id)
         if predecessors:
             upstream = "\n\n".join(f"[{p}]:\n{outputs[p]}" for p in predecessors)
             task += f"\nOutputs from the upstream agents you depend on:\n{upstream}\n"
@@ -1175,6 +1237,9 @@ class Engine:
             self.graph_coordinate()
         elif self.coordinate_mode == "chain":
             self.logger.info("Running in chain-based coordination mode.")
+            self.chain_coordinate()
+        elif self.coordinate_mode == "static":
+            self.logger.info("Running in static (fixed-order chain) coordination mode.")
             self.chain_coordinate()
         elif self.coordinate_mode == "tree":
             self.logger.info("Running in tree-based coordination mode.")

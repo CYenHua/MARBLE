@@ -791,8 +791,77 @@ class BaseAgent:
         self.token_usage += token_counter(model=self.llm, messages=messages)
         return summary
 
+    def write_handoff(
+        self, result: Any, next_agent_id: str, next_profile: str, next_sub_task: str
+    ) -> str:
+        """
+        Write the plan for a fixed next agent (DAG mode with note hand-offs). Mirrors
+        plan_next_agent, except that the next agent and its sub-task are given instead
+        of chosen, so the hand-off carries the same kind of information as in chain mode.
+
+        Args:
+            result (Any): The result from the agent's action.
+            next_agent_id (str): The agent that runs next.
+            next_profile (str): Its profile.
+            next_sub_task (str): Its sub-task in the workflow.
+
+        Returns:
+            str: The planning task for the next agent.
+        """
+        prompt = (
+            f"As Agent '{self.agent_id}' with profile: {self.profile}, "
+            f"you have completed your part of the task with the result:\n{result}\n\n"
+            "The next agent in the workflow is:\n"
+            f"- Agent ID: {next_agent_id}\n"
+            f"  Profile: {next_profile}\n"
+            f"  Sub-task in the workflow: {next_sub_task}\n"
+            "\nBased on the result and the next agent's profile and sub-task, provide a brief plan for the next agent to execute. "
+            "Respond in the following format:\n"
+            '{"planning_task": "<description of the next planning task>"}\n'
+            "You must follow the json format or the system will crash as we fail to interpret the response."
+        )
+        # Same sampling settings as plan_next_agent
+        response = model_prompting(
+            llm_model=self.llm,
+            messages=[{"role": "system", "content": prompt}],
+            return_num=1,
+            max_token_num=256,
+            temperature=0.7,
+            top_p=1.0,
+        )[0].content
+        assert isinstance(response, str)
+        self.token_usage += token_counter(
+            model=self.llm,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "system", "content": response},
+            ],
+        )
+        json_str = response[response.find("{") : response.rfind("}") + 1]
+        try:
+            try:
+                planning_task = json.loads(json_str).get("planning_task")
+            except json.JSONDecodeError:
+                # LaTeX in the plan (e.g. \alpha) is not a valid JSON escape; keep it literal
+                planning_task = json.loads(
+                    re.sub(r'\\(?![\\"/bfnrtu])', r"\\\\", json_str)
+                ).get("planning_task")
+        except (json.JSONDecodeError, AttributeError):
+            planning_task = None
+        if not planning_task:
+            # The plan is usually still there as plain text; pass it on rather than nothing
+            self.logger.warning(
+                f"Agent '{self.agent_id}' wrote an unparsable hand-off for '{next_agent_id}'; passing the raw reply."
+            )
+            planning_task = response.strip()
+        self.logger.info(f"Agent '{self.agent_id}' handed off to '{next_agent_id}' with plan: '{planning_task}'.")
+        return planning_task
+
     def plan_next_agent(
-        self, result: Any, agent_profiles: Dict[str, Dict[str, Any]]
+        self,
+        result: Any,
+        agent_profiles: Dict[str, Dict[str, Any]],
+        fixed_next: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Choose the next agent to pass the task to and provide a planning task, based on the result and profiles of other agents.
@@ -800,6 +869,8 @@ class BaseAgent:
         Args:
             result (Any): The result from the agent's action.
             agent_profiles (Dict[str, Dict[str, Any]]): Profiles of all other agents.
+            fixed_next (Optional[str]): In static mode, the agent that runs next. The prompt is
+                the same except that it names this agent instead of asking for a choice.
 
         Returns:
             Tuple[Optional[str], Optional[str]]: The agent_id of the next agent and the planning task, or (None, None) if no suitable agent is found.
@@ -816,8 +887,14 @@ class BaseAgent:
             if agent_id != self.agent_id:  # Exclude self
                 prompt += f"- Agent ID: {agent_id}\n"
                 prompt += f"  Profile: {profile_info['profile']}\n"
+        if fixed_next is None:
+            prompt += "\nBased on the result and the agent profiles provided, select the most suitable agent to continue the task and provide a brief plan for the next agent to execute. "
+        else:
+            prompt += (
+                f"\nIn this workflow the next agent is fixed: '{fixed_next}'. "
+                f"Based on the result and the agent profiles provided, provide a brief plan for '{fixed_next}' to execute. "
+            )
         prompt += (
-            "\nBased on the result and the agent profiles provided, select the most suitable agent to continue the task and provide a brief plan for the next agent to execute. "
             "Respond in the following format:\n"
             '{"agent_id": "<next_agent_id>", "planning_task": "<description of the next planning task>"}\n'
             "You must follow the json format or the system will crash as we fail to interpret the response."
@@ -861,6 +938,9 @@ class BaseAgent:
                 f"Agent '{self.agent_id}' received an invalid response format from the LLM."
             )
 
+        if fixed_next is not None:
+            # The next agent is not the model's choice; only the plan is taken from the reply
+            return fixed_next, planning_task
         if next_agent_id in agent_profiles and next_agent_id != self.agent_id:
             self.logger.info(
                 f"Agent '{self.agent_id}' selected '{next_agent_id}' as the next agent with plan: '{planning_task}'."
